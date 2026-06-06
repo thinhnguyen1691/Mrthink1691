@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from html import escape
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -47,26 +48,26 @@ CUSTOM_CSS = """
   .kpi-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 14px;
-    margin: 8px 0 18px;
+    gap: 12px;
+    margin: 8px 0 20px;
   }
   .kpi-card {
     position: relative;
     overflow: hidden;
-    min-height: 124px;
-    border: 1px solid rgba(148, 163, 184, 0.28);
-    border-radius: 16px;
-    padding: 18px 18px 16px;
+    min-height: 118px;
+    border: 1px solid rgba(148, 163, 184, 0.32);
+    border-radius: 14px;
+    padding: 16px 16px 14px;
     background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-    box-shadow: 0 18px 34px rgba(15, 23, 42, 0.10), 0 3px 8px rgba(15, 23, 42, 0.05);
+    box-shadow: 0 14px 28px rgba(15, 23, 42, 0.10), 0 2px 6px rgba(15, 23, 42, 0.05);
   }
   .kpi-card::after {
     content: "";
     position: absolute;
-    right: -34px;
-    top: -34px;
-    width: 94px;
-    height: 94px;
+    right: -30px;
+    top: -30px;
+    width: 88px;
+    height: 88px;
     border-radius: 50%;
     background: var(--accent-soft);
   }
@@ -80,37 +81,41 @@ CUSTOM_CSS = """
   }
   .kpi-label {
     color: #64748b;
-    font-size: 13px;
-    font-weight: 750;
+    font-size: 12.5px;
+    line-height: 1.25;
+    font-weight: 800;
     letter-spacing: 0;
   }
   .kpi-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 34px;
-    height: 34px;
+    width: 32px;
+    height: 32px;
     border-radius: 10px;
     color: var(--accent);
     background: var(--accent-soft);
+    font-size: 12px;
     font-weight: 850;
+    flex: 0 0 auto;
   }
   .kpi-value {
     position: relative;
     z-index: 1;
-    margin-top: 16px;
+    margin-top: 14px;
     color: #0f172a;
-    font-size: 28px;
-    line-height: 1.08;
+    font-size: clamp(22px, 1.7vw, 30px);
+    line-height: 1.12;
     font-weight: 850;
     overflow-wrap: anywhere;
   }
   .kpi-sub {
     position: relative;
     z-index: 1;
-    margin-top: 8px;
+    margin-top: 7px;
     color: #64748b;
     font-size: 12px;
+    line-height: 1.3;
   }
   .ops-table-wrap {
     width: 100%;
@@ -325,18 +330,69 @@ def render_dashboard(rows: list[dict], filters: dict[str, str]) -> None:
 
     left, right = st.columns([1, 1])
     with left:
-        st.subheader("Số đơn theo trạng thái")
         status_df = pd.DataFrame(summary["status_counts"], columns=["Trạng thái", "Số đơn"])
-        st.dataframe(status_df, hide_index=True, use_container_width=True)
-        if not status_df.empty:
-            st.bar_chart(status_df.set_index("Trạng thái"))
+        render_pie_panel("Số đơn theo trạng thái", status_df, "Trạng thái", use_status_colors=True)
 
     with right:
-        st.subheader("Số đơn theo NVGH thực hiện")
         driver_df = pd.DataFrame(summary["driver_counts"], columns=["NVGH", "Số đơn"])
-        st.dataframe(driver_df, hide_index=True, use_container_width=True)
-        if not driver_df.empty:
-            st.bar_chart(driver_df.head(12).set_index("NVGH"))
+        render_pie_panel("Số đơn theo NVGH thực hiện", driver_df, "NVGH", use_status_colors=False)
+
+
+def render_pie_panel(title: str, df: pd.DataFrame, label_column: str, use_status_colors: bool) -> None:
+    with st.container(border=True):
+        st.subheader(title)
+        if df.empty:
+            st.info("Chưa có dữ liệu.")
+            return
+
+        chart_df = compact_pie_dataframe(df, label_column)
+        total = chart_df["Số đơn"].sum()
+        chart_df["Tỉ lệ"] = chart_df["Số đơn"] / total * 100 if total else 0
+
+        color = build_pie_color_encoding(chart_df, label_column, use_status_colors)
+        chart = (
+            alt.Chart(chart_df)
+            .mark_arc(innerRadius=64, outerRadius=118, cornerRadius=4, padAngle=0.012)
+            .encode(
+                theta=alt.Theta("Số đơn:Q", title="Số đơn"),
+                color=color,
+                tooltip=[
+                    alt.Tooltip(f"{label_column}:N", title=label_column),
+                    alt.Tooltip("Số đơn:Q", title="Số đơn", format=","),
+                    alt.Tooltip("Tỉ lệ:Q", title="Tỉ lệ", format=".1f"),
+                ],
+            )
+            .properties(height=330)
+        )
+        st.altair_chart(chart, use_container_width=True)
+
+
+def compact_pie_dataframe(df: pd.DataFrame, label_column: str, max_items: int = 8) -> pd.DataFrame:
+    if len(df) <= max_items:
+        return df.copy()
+
+    top = df.head(max_items - 1).copy()
+    other_count = df.iloc[max_items - 1 :]["Số đơn"].sum()
+    other = pd.DataFrame([{label_column: "Khác", "Số đơn": other_count}])
+    return pd.concat([top, other], ignore_index=True)
+
+
+def build_pie_color_encoding(df: pd.DataFrame, label_column: str, use_status_colors: bool):
+    if not use_status_colors:
+        palette = ["#2563eb", "#0f766e", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#475569", "#be123c", "#16a34a"]
+        return alt.Color(
+            f"{label_column}:N",
+            legend=alt.Legend(orient="bottom", columns=2),
+            scale=alt.Scale(range=palette),
+        )
+
+    domain = df[label_column].tolist()
+    color_range = [status_style(status)[0] for status in domain]
+    return alt.Color(
+        f"{label_column}:N",
+        legend=alt.Legend(orient="bottom", columns=2),
+        scale=alt.Scale(domain=domain, range=color_range),
+    )
 
 
 def render_kpi_grid(summary: dict, date_label: str) -> None:
