@@ -348,13 +348,15 @@ def render_pie_panel(title: str, df: pd.DataFrame, label_column: str, use_status
         chart_df = compact_pie_dataframe(df, label_column)
         total = chart_df["Số đơn"].sum()
         chart_df["Tỉ lệ"] = chart_df["Số đơn"] / total * 100 if total else 0
+        chart_df["Nhãn"] = chart_df.apply(lambda row: format_pie_label(row["Số đơn"], row["Tỉ lệ"]), axis=1)
+        chart_df["Nhãn hiển thị"] = chart_df.apply(lambda row: row["Nhãn"] if row["Tỉ lệ"] >= 4 else "", axis=1)
+        chart_df["Chú giải"] = chart_df.apply(lambda row: f"{row[label_column]} · {row['Nhãn']}", axis=1)
 
-        color = build_pie_color_encoding(chart_df, label_column, use_status_colors)
-        chart = (
-            alt.Chart(chart_df)
-            .mark_arc(innerRadius=64, outerRadius=118, cornerRadius=4, padAngle=0.012)
+        color = build_pie_color_encoding(chart_df, "Chú giải", use_status_colors, label_column)
+        base = alt.Chart(chart_df).encode(theta=alt.Theta("Số đơn:Q", title="Số đơn", stack=True))
+        pie = (
+            base.mark_arc(outerRadius=122, cornerRadius=3, padAngle=0.01)
             .encode(
-                theta=alt.Theta("Số đơn:Q", title="Số đơn"),
                 color=color,
                 tooltip=[
                     alt.Tooltip(f"{label_column}:N", title=label_column),
@@ -362,6 +364,13 @@ def render_pie_panel(title: str, df: pd.DataFrame, label_column: str, use_status
                     alt.Tooltip("Tỉ lệ:Q", title="Tỉ lệ", format=".1f"),
                 ],
             )
+        )
+        labels = (
+            base.mark_text(radius=82, size=13, fontWeight=800, color="#0f172a")
+            .encode(text=alt.Text("Nhãn hiển thị:N"))
+        )
+        chart = (
+            alt.layer(pie, labels)
             .properties(height=330)
         )
         st.altair_chart(chart, use_container_width=True)
@@ -377,22 +386,27 @@ def compact_pie_dataframe(df: pd.DataFrame, label_column: str, max_items: int = 
     return pd.concat([top, other], ignore_index=True)
 
 
-def build_pie_color_encoding(df: pd.DataFrame, label_column: str, use_status_colors: bool):
+def build_pie_color_encoding(df: pd.DataFrame, color_column: str, use_status_colors: bool, source_label_column: str):
     if not use_status_colors:
         palette = ["#2563eb", "#0f766e", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#475569", "#be123c", "#16a34a"]
         return alt.Color(
-            f"{label_column}:N",
+            f"{color_column}:N",
             legend=alt.Legend(orient="bottom", columns=2),
             scale=alt.Scale(range=palette),
         )
 
-    domain = df[label_column].tolist()
-    color_range = [status_style(status)[0] for status in domain]
+    domain = df[color_column].tolist()
+    color_range = [status_style(status)[0] for status in df[source_label_column].tolist()]
     return alt.Color(
-        f"{label_column}:N",
+        f"{color_column}:N",
         legend=alt.Legend(orient="bottom", columns=2),
         scale=alt.Scale(domain=domain, range=color_range),
     )
+
+
+def format_pie_label(count: float, ratio: float) -> str:
+    ratio_text = f"{ratio:.1f}".replace(".", ",")
+    return f"{format_number(count, 0)} đơn · {ratio_text}%"
 
 
 def render_kpi_grid(summary: dict, date_label: str) -> None:
